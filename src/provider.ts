@@ -123,7 +123,7 @@ export class UpstreamProvider extends BaseProvider {
                 yield { type: 'final', finishReason: chunk.choices[0].finish_reason };
               }
             } catch {
-              // 無視
+              // ignore
             }
           }
         }
@@ -131,5 +131,58 @@ export class UpstreamProvider extends BaseProvider {
     } finally {
       reader.releaseLock();
     }
+  }
+}
+
+export abstract class StatefulProvider extends BaseProvider {
+  private threads = new Map<string, string>(); // userId → providerThreadId
+
+  /**
+   * Provider-specific thread creation process.
+   * @param userId User identifier (obtained from request.user)
+   * @returns Provider-side thread ID
+   */
+  protected abstract createThread(userId: string): Promise<string>;
+
+  /**
+   * Send a message to thread, return the response in chunks.
+   * @param threadId Provider-side thread ID
+   * @param message OpenAI message object (role, content)
+   * @returns Async iterator
+   */
+  protected abstract sendMessage(
+    threadId: string,
+    message: OpenAIRequest['messages'][0],
+  ): AsyncIterable<Chunk>;
+
+  /**
+   * Resets (forces the creation of a new) the thread for the specified user.
+   * @param userId User ID (default: "default")
+   */
+  async resetThread(userId: string = 'default'): Promise<void> {
+    this.threads.delete(userId);
+  }
+
+  /**
+   * Processes OpenAI API requests.
+   * - Uses request.user as the thread identifier.
+   * - Automatically creates a thread if one does not exist.
+   * - Sends the latest message to the thread and streams the response.
+   */
+  async *run(request: OpenAIRequest): AsyncIterable<Chunk> {
+    const userId = request.user ?? 'default';
+    let threadId = this.threads.get(userId);
+
+    if (!threadId) {
+      threadId = await this.createThread(userId);
+      this.threads.set(userId, threadId);
+    }
+
+    const lastMessage = request.messages[request.messages.length - 1];
+    if (!lastMessage) {
+      throw new Error('No messages provided');
+    }
+
+    yield* this.sendMessage(threadId, lastMessage);
   }
 }
