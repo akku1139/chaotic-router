@@ -17,6 +17,7 @@ export interface ChaoticRouterOptions {
 export class ChaoticRouter {
   private app: Hono;
   private providers: { prefix: string; provider: BaseProvider }[];
+  fetch: Hono['fetch'];
 
   constructor(options: ChaoticRouterOptions) {
     this.app = new Hono();
@@ -34,6 +35,7 @@ export class ChaoticRouter {
     });
 
     this.setupRoutes(options.upgradeWebSocket);
+    this.fetch = this.app.fetch;
   }
 
   private setupRoutes(upgradeWebSocket: UpgradeWebSocket) {
@@ -204,9 +206,5 @@ export class ChaoticRouter {
         }),
       );
     }
-  }
-
-  async fetch(request: Request): Promise<Response> {
-    return await this.app.fetch(request);
   }
 }
