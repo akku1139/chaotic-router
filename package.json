@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "check": "tsc"
+  },
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@10.33.0",
+  "dependencies": {
+    "hono": "^4.12.16"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^2.0.1",
+    "openai": "^6.35.0",
+    "typescript": "^6.0.3"
+  }
+}
