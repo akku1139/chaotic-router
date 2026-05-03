@@ -7,6 +7,11 @@ import type {
   ChatCompletionChunk,
 } from 'openai/resources/chat/completions';
 
+import type {
+  ResponseCreateParamsNonStreaming,
+  ResponseCreateParamsStreaming,
+} from 'openai/resources/responses/responses';
+
 export type OpenAIRequest =
   | ChatCompletionCreateParamsNonStreaming
   | ChatCompletionCreateParamsStreaming;
@@ -21,3 +26,6 @@ export interface Chunk {
   finishReason?: string;
   usage?: { promptTokens: number; completionTokens: number };
 }
+
+export type ResponsesRequest = ResponseCreateParamsNonStreaming | ResponseCreateParamsStreaming;
+export type { Response as ResponsesResponse } from 'openai/resources/responses/responses';
