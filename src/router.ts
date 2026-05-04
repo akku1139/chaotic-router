@@ -2,13 +2,14 @@
 
 import { Hono } from 'hono';
 import type { UpgradeWebSocket } from 'hono/ws';
-import type { OpenAIRequest, OpenAIResponse, OpenAIStreamChunk, ResponsesRequest, ResponsesResponse } from './types.ts';
+import type { OpenAIRequest, OpenAIResponse, OpenAIStreamChunk, ResponsesRequest } from './types.ts';
 import { BaseProvider, UpstreamProvider } from './provider.ts';
 import type {
   ChatCompletionMessageParam,
   ChatCompletionDeveloperMessageParam,
   ChatCompletionUserMessageParam,
 } from 'openai/resources/chat/completions';
+import type { Response as ResponsesResponse } from 'openai/resources/responses/responses.mjs';
 
 export type ProviderConfig =
   | { prefix: string; provider: BaseProvider }
@@ -17,32 +18,6 @@ export type ProviderConfig =
 export interface ChaoticRouterOptions {
   providers: ProviderConfig[];
   upgradeWebSocket: UpgradeWebSocket;
-}
-
-interface SimpleResponsesResponse {
-  id: string;
-  object: 'response';
-  created_at: number;
-  model: string;
-  status: 'completed' | 'in_progress' | 'failed';
-  output: Array<{
-    type: 'message';
-    id: string;
-    status: 'completed';
-    role: 'assistant';
-    content: Array<{
-      type: 'output_text';
-      text: string;
-      annotations: any[];
-    }>;
-  }>;
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens: number;
-    input_tokens_details?: { cached_tokens?: number };
-    output_tokens_details?: { reasoning_tokens?: number };
-  };
 }
 
 export class ChaoticRouter {
@@ -261,10 +236,13 @@ export class ChaoticRouter {
           for await (const chunk of chunkIter) {
             if (chunk.type === 'text') fullContent += chunk.content;
           }
-          const response: SimpleResponsesResponse = {
+          const response: ResponsesResponse = {
             id: `resp-${Date.now()}`,
             object: 'response',
             created_at: Math.floor(Date.now() / 1000),
+            error: null,
+            instructions: null,
+            incomplete_details: null,
             model: fullModel,
             status: 'completed',
             output: [{
@@ -278,12 +256,37 @@ export class ChaoticRouter {
                 annotations: [],
               }],
             }],
+            output_text: fullContent,
+            parallel_tool_calls: true,
+            previous_response_id: null,
+            reasoning: {
+              effort: null,
+              summary: null
+            },
+            temperature: null,
+            text: {
+              format: {
+                type: "text"
+              }
+            },
+            tool_choice: "auto",
+            tools: [],
+            top_p: null,
+            // FIXME
             usage: {
               input_tokens: 0,
               output_tokens: 0,
               total_tokens: 0,
+              input_tokens_details: {
+                cached_tokens: 0
+              },
+              output_tokens_details: {
+                reasoning_tokens: 0
+              },
             },
+            metadata: {}
           };
+
           return c.json(response);
         } else {
           const encoder = new TextEncoder();
@@ -327,7 +330,7 @@ export class ChaoticRouter {
         model: 'dummy',
         status: 'completed',
         output: [],
-      } as any; // FIXME
+      } as any;
       return c.json(dummyResponse);
     });
 

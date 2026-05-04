@@ -28,4 +28,3 @@ export interface Chunk {
 }
 
 export type ResponsesRequest = ResponseCreateParamsNonStreaming | ResponseCreateParamsStreaming;
-export type { Response as ResponsesResponse } from 'openai/resources/responses/responses';
