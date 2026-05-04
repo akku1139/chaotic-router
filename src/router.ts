@@ -85,21 +85,17 @@ export class ChaoticRouter {
         for (const item of req.input) {
           if (item.type !== 'message') continue; // TODO
           let role = item.role;
-          let content = item.content;
-          if (!role) continue;
-          if (Array.isArray(content)) {
-            const texts = content
-              .filter((part: any) => part.type === 'input_text' && part.text)
-              .map((part: any) => part.text);
-            content = texts.join('\n');
-          } else if (typeof content !== 'string') {
-            content = JSON.stringify(content);
-          }
-          if (content) {
+          if (Array.isArray(item.content)) {
+            item.content
+              .filter((part) => part.type === 'input_text' && part.text)
+              .forEach((part: any) =>
+                input.push({ role: role === 'developer' ? 'developer' : 'user', content: [{ type: 'input_text', text: part }] })
+              );
+          } else {
             if (role === 'developer') {
-              input.push({ role: 'developer', content: [{ type: 'input_text', text: content }] });
+              input.push({ role: 'developer', content: [{ type: 'input_text', text: item.content }] });
             } else {
-              input.push({ role: 'user', content: [{ type: 'input_text', text: content }] });
+              input.push({ role: 'user', content: [{ type: 'input_text', text: item.content }] });
             }
           }
         }
