@@ -152,7 +152,7 @@ export abstract class StatefulProvider<TThread = any> extends BaseProvider {
    * @param systemPrompts System prompt array
    * @returns Provider-side thread ID
    */
-  protected abstract createThread(userId: string, systemPrompts?: string[], tools?: Tool[],): Promise<TThread>;
+  protected abstract createThread(userId: string, systemPrompts?: string[], tools?: Tool[]): Promise<TThread>;
 
   /**
    * Send a message to thread, return the response in chunks.
@@ -163,7 +163,7 @@ export abstract class StatefulProvider<TThread = any> extends BaseProvider {
    */
    protected abstract sendMessage(
      thread: TThread,
-     newMessages: ChaoticRouterRequest['input'],
+     newMessages: ChaoticRouterRequest['input'][number],
      fullRequest: ChaoticRouterRequest,
    ): AsyncIterable<Chunk>;
 
@@ -259,6 +259,6 @@ export abstract class StatefulProvider<TThread = any> extends BaseProvider {
       }
     }
 
-    yield* this.sendMessage(thread, [this.extractLastUserMessage(request.input)], request);
+    yield* this.sendMessage(thread, this.extractLastUserMessage(request.input), request);
   }
 }
