@@ -135,14 +135,13 @@ export class UpstreamProvider extends BaseProvider {
 }
 
 export abstract class StatefulProvider extends BaseProvider {
-  private threads = new Map<string, string>(); // userId → providerThreadId
-
   /**
    * Provider-specific thread creation process.
    * @param userId User identifier (obtained from request.user)
+   * @param systemPrompts System prompt array
    * @returns Provider-side thread ID
    */
-  protected abstract createThread(userId: string): Promise<string>;
+  protected abstract createThread(userId: string, systemPrompts?: string[]): Promise<string>;
 
   /**
    * Send a message to thread, return the response in chunks.
@@ -155,34 +154,76 @@ export abstract class StatefulProvider extends BaseProvider {
     message: OpenAIRequest['messages'][0],
   ): AsyncIterable<Chunk>;
 
-  /**
-   * Resets (forces the creation of a new) the thread for the specified user.
-   * @param userId User ID (default: "default")
-   */
-  async resetThread(userId: string = 'default'): Promise<void> {
-    this.threads.delete(userId);
+  /** Update system prompts of an existing thread (if supported). */
+  protected async updateSystemPrompt?(threadId: string, systemPrompts: string[]): Promise<void>;
+
+  #threads = new Map<string, string>(); // userId -> threadId
+  #threadSystemPrompts = new Map<string, string[]>(); // threadId -> prompts
+
+  /** Extract user id from request (can be overridden). */
+  protected getUserId(request: OpenAIRequest): string {
+    if (request.user) return request.user;
+    if (request.metadata?.user_id) return request.metadata.user_id;
+    return 'default';
   }
 
-  /**
-   * Processes OpenAI API requests.
-   * - Uses request.user as the thread identifier.
-   * - Automatically creates a thread if one does not exist.
-   * - Sends the latest message to the thread and streams the response.
-   */
-  async *run(request: OpenAIRequest): AsyncIterable<Chunk> {
-    const userId = request.user ?? 'default';
-    let threadId = this.threads.get(userId);
+  /** Extract system prompts from messages array (developer/system roles). */
+  private extractSystemPrompts(messages: OpenAIRequest['messages']): string[] {
+    const prompts: string[] = [];
+    for (const msg of messages) {
+      if (msg.role === 'developer' || msg.role === 'system') {
+        const content = msg.content;
+        if (Array.isArray(content)) {
+          for (const part of content as any[]) {
+            if (part?.type === 'input_text' && typeof part.text === 'string') {
+              prompts.push(part.text);
+            }
+          }
+        } else if (typeof content === 'string') {
+          prompts.push(content);
+        }
+      }
+    }
+    return prompts;
+  }
+
+  /** Extract the last user message from messages array. */
+  private extractLastUserMessage(messages: OpenAIRequest['messages']): any {
+    const userMsgs = messages.filter(m => m.role === 'user');
+    const last = userMsgs[userMsgs.length - 1];
+    if (!last) throw new Error('No user message found');
+    return last;
+  }
+
+  private arraysEqual(a: string[], b: string[]): boolean {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+  }
+
+  async *run(request: OpenAIRequest, _signal?: AbortSignal): AsyncIterable<Chunk> {
+    const userId = this.getUserId(request);
+    const systemPrompts = this.extractSystemPrompts(request.messages);
+    const lastUserMsg = this.extractLastUserMessage(request.messages);
+
+    let threadId = this.#threads.get(userId);
+    const oldPrompts = this.#threadSystemPrompts.get(threadId || '');
 
     if (!threadId) {
-      threadId = await this.createThread(userId);
-      this.threads.set(userId, threadId);
+      // Create new thread
+      threadId = await this.createThread(userId, systemPrompts.length ? systemPrompts : undefined);
+      this.#threads.set(userId, threadId);
+      if (systemPrompts.length) this.#threadSystemPrompts.set(threadId, systemPrompts);
+    } else if (systemPrompts.length && !this.arraysEqual(oldPrompts || [], systemPrompts)) {
+      // System prompts changed
+      if (this.updateSystemPrompt) {
+        await this.updateSystemPrompt(threadId, systemPrompts);
+        this.#threadSystemPrompts.set(threadId, systemPrompts);
+      } else {
+        console.warn(
+          `[StatefulProvider] System prompts changed for thread ${threadId} but provider does not support update. Ignoring.`
+        );
+      }
     }
 
-    const lastMessage = request.messages[request.messages.length - 1];
-    if (!lastMessage) {
-      throw new Error('No messages provided');
-    }
-
-    yield* this.sendMessage(threadId, lastMessage);
+    yield* this.sendMessage(threadId, lastUserMsg);
   }
 }
