@@ -4,7 +4,11 @@ import { Hono } from 'hono';
 import type { UpgradeWebSocket } from 'hono/ws';
 import type { OpenAIRequest, OpenAIResponse, OpenAIStreamChunk, ResponsesRequest, ResponsesResponse } from './types.ts';
 import { BaseProvider, UpstreamProvider } from './provider.ts';
-import type { ChatCompletionUserMessageParam } from 'openai/resources/chat/completions';
+import type {
+  ChatCompletionMessageParam,
+  ChatCompletionDeveloperMessageParam,
+  ChatCompletionUserMessageParam,
+} from 'openai/resources/chat/completions';
 
 export type ProviderConfig =
   | { prefix: string; provider: BaseProvider }
@@ -13,6 +17,32 @@ export type ProviderConfig =
 export interface ChaoticRouterOptions {
   providers: ProviderConfig[];
   upgradeWebSocket: UpgradeWebSocket;
+}
+
+interface SimpleResponsesResponse {
+  id: string;
+  object: 'response';
+  created_at: number;
+  model: string;
+  status: 'completed' | 'in_progress' | 'failed';
+  output: Array<{
+    type: 'message';
+    id: string;
+    status: 'completed';
+    role: 'assistant';
+    content: Array<{
+      type: 'output_text';
+      text: string;
+      annotations: any[];
+    }>;
+  }>;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    input_tokens_details?: { cached_tokens?: number };
+    output_tokens_details?: { reasoning_tokens?: number };
+  };
 }
 
 export class ChaoticRouter {
@@ -181,7 +211,9 @@ export class ChaoticRouter {
       }
       const slashIndex = fullModel.indexOf('/');
       if (slashIndex === -1) {
-        return c.json({ error: { message: `Model must be in format 'provider/model'`, type: 'invalid_request_error' } }, 400);
+        return c.json({
+          error: { message: `Model must be in format 'provider/model', got '${fullModel}'`, type: 'invalid_request_error' },
+        }, 400);
       }
       const prefix = fullModel.substring(0, slashIndex);
       const modelName = fullModel.substring(slashIndex + 1);
@@ -190,19 +222,27 @@ export class ChaoticRouter {
         return c.json({ error: { message: `Unknown provider: ${prefix}` } }, 404);
       }
 
-      let inputText = '';
-      if (typeof req.input === 'string') {
-        inputText = req.input;
-      } else if (Array.isArray(req.input)) {
-        // FIXME: the last message may be user's
-        const lastItem = req.input[req.input.length - 1];
-        if (lastItem && 'content' in lastItem && typeof lastItem.content === 'string') {
-          inputText = lastItem.content;
+      const messages: ChatCompletionMessageParam[] = [];
+      for (const item of req.input as any[]) {
+        let role = item.role;
+        let content = item.content;
+        if (!role) continue;
+        if (Array.isArray(content)) {
+          const texts = content
+            .filter((part: any) => part.type === 'input_text' && part.text)
+            .map((part: any) => part.text);
+          content = texts.join('\n');
+        } else if (typeof content !== 'string') {
+          content = JSON.stringify(content);
+        }
+        if (content) {
+          if (role === 'developer') {
+            messages.push({ role: 'developer', content } satisfies ChatCompletionDeveloperMessageParam);
+          } else {
+            messages.push({ role: 'user', content } satisfies ChatCompletionUserMessageParam);
+          }
         }
       }
-      const messages: ChatCompletionUserMessageParam[] = [
-        { role: 'user', content: inputText },
-      ];
 
       const openaiReq: OpenAIRequest = {
         model: modelName,
@@ -221,7 +261,7 @@ export class ChaoticRouter {
           for await (const chunk of chunkIter) {
             if (chunk.type === 'text') fullContent += chunk.content;
           }
-          const response: ResponsesResponse = {
+          const response: SimpleResponsesResponse = {
             id: `resp-${Date.now()}`,
             object: 'response',
             created_at: Math.floor(Date.now() / 1000),
@@ -242,10 +282,8 @@ export class ChaoticRouter {
               input_tokens: 0,
               output_tokens: 0,
               total_tokens: 0,
-              input_tokens_details: { cached_tokens: 0 },
-              output_tokens_details: { reasoning_tokens: 0 },
             },
-          } as any; // FIXME
+          };
           return c.json(response);
         } else {
           const encoder = new TextEncoder();
