@@ -2,13 +2,8 @@
 
 import { Hono } from 'hono';
 import type { UpgradeWebSocket } from 'hono/ws';
-import type { OpenAIRequest, OpenAIResponse, OpenAIStreamChunk, ResponsesRequest } from './types.ts';
+import type { ResponsesRequest, ChaoticRouterRequest } from './types.ts';
 import { BaseProvider, UpstreamProvider } from './provider.ts';
-import type {
-  ChatCompletionMessageParam,
-  ChatCompletionDeveloperMessageParam,
-  ChatCompletionUserMessageParam,
-} from 'openai/resources/chat/completions';
 import type { Response as ResponsesResponse, ResponseStreamEvent } from 'openai/resources/responses/responses.mjs';
 
 export type ProviderConfig =
@@ -80,34 +75,40 @@ export class ChaoticRouter {
         return c.json({ error: { message: `Unknown provider: ${prefix}` } }, 404);
       }
 
-      const messages: ChatCompletionMessageParam[] = [];
-      for (const item of req.input as any[]) {
-        let role = item.role;
-        let content = item.content;
-        if (!role) continue;
-        if (Array.isArray(content)) {
-          const texts = content
-            .filter((part: any) => part.type === 'input_text' && part.text)
-            .map((part: any) => part.text);
-          content = texts.join('\n');
-        } else if (typeof content !== 'string') {
-          content = JSON.stringify(content);
-        }
-        if (content) {
-          if (role === 'developer') {
-            messages.push({ role: 'developer', content } satisfies ChatCompletionDeveloperMessageParam);
-          } else {
-            messages.push({ role: 'user', content } satisfies ChatCompletionUserMessageParam);
+      const input: ChaoticRouterRequest['input'] = [];
+      if (req.instructions) {
+        input.push({ role: 'developer', content: [{ type: 'input_text', text: req.instructions }]});
+      }
+      if (typeof req.input === 'string') {
+        input.push({ role: 'user', content: [{ type: 'input_text', text: req.input }]});
+      } else if (Array.isArray(req.input)) {
+        for (const item of req.input) {
+          if (item.type !== 'message') continue; // TODO
+          let role = item.role;
+          let content = item.content;
+          if (!role) continue;
+          if (Array.isArray(content)) {
+            const texts = content
+              .filter((part: any) => part.type === 'input_text' && part.text)
+              .map((part: any) => part.text);
+            content = texts.join('\n');
+          } else if (typeof content !== 'string') {
+            content = JSON.stringify(content);
+          }
+          if (content) {
+            if (role === 'developer') {
+              input.push({ role: 'developer', content: [{ type: 'input_text', text: content }] });
+            } else {
+              input.push({ role: 'user', content: [{ type: 'input_text', text: content }] });
+            }
           }
         }
       }
 
-      const openaiReq: OpenAIRequest = {
+      const openaiReq: ChaoticRouterRequest = {
+        ...req,
         model: modelName,
-        messages,
-        stream: req.stream === true,
-        temperature: req.temperature ?? 0.7,
-        max_tokens: req.max_output_tokens ?? 100,
+        input,
       };
 
       const streamMode = req.stream === true;

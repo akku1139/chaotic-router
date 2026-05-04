@@ -1,23 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type {
-  ChatCompletionCreateParamsNonStreaming,
-  ChatCompletionCreateParamsStreaming,
-  ChatCompletion,
-  ChatCompletionChunk,
-} from 'openai/resources/chat/completions';
-
-import type {
   ResponseCreateParamsNonStreaming,
   ResponseCreateParamsStreaming,
 } from 'openai/resources/responses/responses';
-
-export type OpenAIRequest =
-  | ChatCompletionCreateParamsNonStreaming
-  | ChatCompletionCreateParamsStreaming;
-
-export type OpenAIResponse = ChatCompletion;
-export type OpenAIStreamChunk = ChatCompletionChunk;
 
 export interface Chunk {
   type: 'text' | 'tool_call' | 'final';
@@ -28,3 +14,6 @@ export interface Chunk {
 }
 
 export type ResponsesRequest = ResponseCreateParamsNonStreaming | ResponseCreateParamsStreaming;
+export type ChaoticRouterRequest = Omit<ResponsesRequest, 'input'> & {
+  input: Extract<NonNullable<ResponsesRequest['input']>[number], { content: any[] }>[];
+};
