@@ -134,14 +134,14 @@ export class UpstreamProvider extends BaseProvider {
   }
 }
 
-export abstract class StatefulProvider extends BaseProvider {
+// provider.ts
+export abstract class StatefulProvider<TThread = any> extends BaseProvider {
   /**
    * Provider-specific thread creation process.
-   * @param userId User identifier (obtained from request.user)
    * @param systemPrompts System prompt array
    * @returns Provider-side thread ID
    */
-  protected abstract createThread(userId: string, systemPrompts?: string[]): Promise<string>;
+  protected abstract createThread(userId: string, systemPrompts?: string[]): Promise<TThread>;
 
   /**
    * Send a message to thread, return the response in chunks.
@@ -150,15 +150,17 @@ export abstract class StatefulProvider extends BaseProvider {
    * @returns Async iterator
    */
   protected abstract sendMessage(
-    threadId: string,
+    thread: TThread,
     message: OpenAIRequest['messages'][0],
   ): AsyncIterable<Chunk>;
 
   /** Update system prompts of an existing thread (if supported). */
-  protected async updateSystemPrompt?(threadId: string, systemPrompts: string[]): Promise<void>;
+  protected updateSystemPrompt?(thread: TThread, systemPrompts: string[]): Promise<void>;
 
-  #threads = new Map<string, string>(); // userId -> threadId
-  #threadSystemPrompts = new Map<string, string[]>(); // threadId -> prompts
+  protected getThreadId?(thread: TThread): string; // option, for debug
+
+  #threads = new Map<string, TThread>();
+  #threadSystemPrompts = new Map<TThread, string[]>();
 
   /** Extract user id from request (can be overridden). */
   protected getUserId(request: OpenAIRequest): string {
@@ -204,26 +206,22 @@ export abstract class StatefulProvider extends BaseProvider {
     const systemPrompts = this.extractSystemPrompts(request.messages);
     const lastUserMsg = this.extractLastUserMessage(request.messages);
 
-    let threadId = this.#threads.get(userId);
-    const oldPrompts = this.#threadSystemPrompts.get(threadId || '');
+    let thread = this.#threads.get(userId);
+    const oldPrompts = thread ? this.#threadSystemPrompts.get(thread) : undefined;
 
-    if (!threadId) {
-      // Create new thread
-      threadId = await this.createThread(userId, systemPrompts.length ? systemPrompts : undefined);
-      this.#threads.set(userId, threadId);
-      if (systemPrompts.length) this.#threadSystemPrompts.set(threadId, systemPrompts);
+    if (!thread) {
+      thread = await this.createThread(userId, systemPrompts.length ? systemPrompts : undefined);
+      this.#threads.set(userId, thread);
+      if (systemPrompts.length) this.#threadSystemPrompts.set(thread, systemPrompts);
     } else if (systemPrompts.length && !this.arraysEqual(oldPrompts || [], systemPrompts)) {
-      // System prompts changed
       if (this.updateSystemPrompt) {
-        await this.updateSystemPrompt(threadId, systemPrompts);
-        this.#threadSystemPrompts.set(threadId, systemPrompts);
+        await this.updateSystemPrompt(thread, systemPrompts);
+        this.#threadSystemPrompts.set(thread, systemPrompts);
       } else {
-        console.warn(
-          `[StatefulProvider] System prompts changed for thread ${threadId} but provider does not support update. Ignoring.`
-        );
+        console.warn(`System prompts changed for thread but provider does not support update.`);
       }
     }
 
-    yield* this.sendMessage(threadId, lastUserMsg);
+    yield* this.sendMessage(thread, lastUserMsg);
   }
 }
