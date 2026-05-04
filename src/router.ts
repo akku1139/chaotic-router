@@ -9,7 +9,7 @@ import type {
   ChatCompletionDeveloperMessageParam,
   ChatCompletionUserMessageParam,
 } from 'openai/resources/chat/completions';
-import type { Response as ResponsesResponse } from 'openai/resources/responses/responses.mjs';
+import type { Response as ResponsesResponse, ResponseStreamEvent } from 'openai/resources/responses/responses.mjs';
 
 export type ProviderConfig =
   | { prefix: string; provider: BaseProvider }
@@ -290,29 +290,155 @@ export class ChaoticRouter {
           return c.json(response);
         } else {
           const encoder = new TextEncoder();
+          const responseId = `resp_${Date.now()}_${crypto.randomUUID()}`;
+          const itemId = `msg_${Date.now()}_${crypto.randomUUID()}`;
+          const created_at = Math.floor(Date.now() / 1000);
+
+          const responseBase = {
+            id: responseId,
+            object: 'response' as const,
+            created_at,
+            model: fullModel,
+            error: null,
+            incomplete_details: null,
+            instructions: '',
+            max_output_tokens: req.max_output_tokens ?? null,
+            parallel_tool_calls: true,
+            previous_response_id: null,
+            reasoning: { effort: null, summary: null },
+            store: true,
+            temperature: req.temperature ?? 1.0,
+            text: { format: { type: 'text' as const } },
+            tool_choice: 'auto' as ResponsesResponse['tool_choice'],
+            tools: [],
+            top_p: 1.0,
+            truncation: 'disabled' as const,
+            metadata: {},
+
+            output_text: '',
+          } ;
+
           const readable = new ReadableStream({
             async start(controller) {
+              let seq = 0;
+              const event = <T extends ResponseStreamEvent>(data: T extends any ? Omit<T, 'sequence_number'> : never): void => {
+                controller.enqueue(encoder.encode(
+                  `event: ${data.type}\ndata: ${JSON.stringify({ ...data, sequence_number: seq++ } satisfies ResponseStreamEvent)}\n\n`
+                ))
+              };
+
               try {
+                event({
+                  type: 'response.created',
+                  response: { ...responseBase, status: 'in_progress', output: [] },
+                });
+
+                event({
+                  type: 'response.in_progress',
+                  response: { ...responseBase, status: 'in_progress', output: [] },
+                });
+
+                event({
+                  type: 'response.output_item.added',
+                  output_index: 0,
+                  item: {
+                    id: itemId,
+                    type: 'message',
+                    status: 'in_progress',
+                    role: 'assistant',
+                    content: [],
+                  },
+                });
+
+                event({
+                  type: 'response.content_part.added',
+                  item_id: itemId,
+                  output_index: 0,
+                  content_index: 0,
+                  part: { type: 'output_text', text: '', annotations: [] },
+                });
+
+                let fullText = '';
                 for await (const chunk of chunkIter) {
                   if (chunk.type === 'text' && chunk.content) {
-                    const event = {
+                    fullText += chunk.content;
+                    event({
                       type: 'response.output_text.delta',
+                      item_id: itemId,
+                      output_index: 0,
+                      content_index: 0,
                       delta: chunk.content,
-                    };
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-                  } else if (chunk.type === 'final') {
-                    const doneEvent = { type: 'response.completed' };
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
+                      logprobs: [],
+                    });
                   }
                 }
-                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+
+                event({
+                  type: 'response.output_text.done',
+                  item_id: itemId,
+                  output_index: 0,
+                  content_index: 0,
+                  text: fullText,
+                  logprobs: [],
+                });
+
+                event({
+                  type: 'response.content_part.done',
+                  item_id: itemId,
+                  output_index: 0,
+                  content_index: 0,
+                  part: { type: 'output_text', text: fullText, annotations: [] },
+                });
+
+                event({
+                  type: 'response.output_item.done',
+                  output_index: 0,
+                  item: {
+                    id: itemId,
+                    type: 'message',
+                    status: 'completed',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: fullText, annotations: [] }],
+                  },
+                });
+
+                event({
+                  type: 'response.completed',
+                  response: {
+                    ...responseBase,
+                    status: 'completed',
+                    output: [{
+                      id: itemId,
+                      type: 'message',
+                      status: 'completed',
+                      role: 'assistant',
+                      content: [{ type: 'output_text', text: fullText, annotations: [] }],
+                    }],
+                    usage: {
+                      input_tokens: 0,
+                      output_tokens: 0,
+                      total_tokens: 0,
+                      input_tokens_details: { cached_tokens: 0 },
+                      output_tokens_details: { reasoning_tokens: 0 },
+                    },
+                  },
+                });
+
                 controller.close();
               } catch (err) {
+                console.error('Stream error:', err);
                 controller.error(err);
               }
             },
           });
-          return new Response(readable, { headers: { 'Content-Type': 'text/event-stream' } });
+
+          return new Response(readable, {
+            headers: {
+              'Content-Type': 'text/event-stream; charset=utf-8',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+            },
+          });
         }
       } catch (err) {
         console.error(err);
